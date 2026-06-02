@@ -1,3 +1,13 @@
+import express from "express";
+import { chromium } from "playwright";
+
+const app = express();
+app.use(express.json());
+
+app.get("/", (req, res) => {
+  res.send("BrokerSnapshot scraper is running");
+});
+
 app.post("/brokersnapshot", async (req, res) => {
   const { mcNumber } = req.body;
 
@@ -17,7 +27,6 @@ app.post("/brokersnapshot", async (req, res) => {
       viewport: { width: 1400, height: 1000 }
     });
 
-    // Go directly to BrokerSnapshot search results
     const searchUrl = `https://brokersnapshot.com/?search=${encodeURIComponent(mcNumber)}`;
 
     await page.goto(searchUrl, {
@@ -27,11 +36,9 @@ app.post("/brokersnapshot", async (req, res) => {
 
     await page.waitForTimeout(7000);
 
-    // Try clicking the MC link if it appears
     const possibleMcLinks = [
       `a:has-text("MC${mcNumber}")`,
-      `a:has-text("${mcNumber}")`,
-      `text=MC${mcNumber}`
+      `a:has-text("${mcNumber}")`
     ];
 
     let clickedProfile = false;
@@ -60,7 +67,9 @@ app.post("/brokersnapshot", async (req, res) => {
       for (const label of labels) {
         const regex = new RegExp(`${label}\\s*[:\\-]?\\s*([^\\n]+)`, "i");
         const match = text.match(regex);
-        if (match?.[1]) return match[1].trim();
+        if (match && match[1]) {
+          return match[1].trim();
+        }
       }
       return null;
     }
@@ -89,9 +98,10 @@ app.post("/brokersnapshot", async (req, res) => {
 
     await browser.close();
     return res.json(result);
-
   } catch (error) {
-    if (browser) await browser.close();
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
 
     return res.status(500).json({
       mcNumber,
@@ -99,4 +109,10 @@ app.post("/brokersnapshot", async (req, res) => {
       error: error.message
     });
   }
+});
+
+const port = process.env.PORT || 10000;
+
+app.listen(port, "0.0.0.0", () => {
+  console.log(`Server running on port ${port}`);
 });
