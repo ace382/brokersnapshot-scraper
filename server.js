@@ -1,13 +1,3 @@
-import express from "express";
-import { chromium } from "playwright";
-
-const app = express();
-app.use(express.json());
-
-app.get("/", (req, res) => {
-  res.send("BrokerSnapshot scraper is running");
-});
-
 app.post("/brokersnapshot", async (req, res) => {
   const { mcNumber } = req.body;
 
@@ -23,36 +13,46 @@ app.post("/brokersnapshot", async (req, res) => {
       args: ["--no-sandbox", "--disable-dev-shm-usage"]
     });
 
-    const page = await browser.newPage();
+    const page = await browser.newPage({
+      viewport: { width: 1400, height: 1000 }
+    });
 
-    await page.goto("https://brokersnapshot.com/", {
+    // Go directly to BrokerSnapshot search results
+    const searchUrl = `https://brokersnapshot.com/?search=${encodeURIComponent(mcNumber)}`;
+
+    await page.goto(searchUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60000
     });
 
-    // Search MC number
-    await page.fill('input[type="search"], input[type="text"], input', String(mcNumber));
+    await page.waitForTimeout(7000);
 
-    await Promise.all([
-      page.waitForLoadState("networkidle").catch(() => {}),
-      page.keyboard.press("Enter")
-    ]);
+    // Try clicking the MC link if it appears
+    const possibleMcLinks = [
+      `a:has-text("MC${mcNumber}")`,
+      `a:has-text("${mcNumber}")`,
+      `text=MC${mcNumber}`
+    ];
 
-    await page.waitForTimeout(5000);
+    let clickedProfile = false;
 
-    // Try clicking MC link if present
-    const mcLink = page.locator(`a:has-text("MC${mcNumber}")`).first();
+    for (const selector of possibleMcLinks) {
+      const locator = page.locator(selector).first();
 
-    if (await mcLink.count()) {
-      await Promise.all([
-        page.waitForLoadState("networkidle").catch(() => {}),
-        mcLink.click()
-      ]);
+      if (await locator.count()) {
+        await Promise.all([
+          page.waitForLoadState("networkidle").catch(() => {}),
+          locator.click()
+        ]);
 
-      await page.waitForTimeout(5000);
+        clickedProfile = true;
+        await page.waitForTimeout(7000);
+        break;
+      }
     }
 
-    const text = await page.locator("body").innerText();
+    const text = await page.locator("body").innerText().catch(() => "");
+    const html = await page.content().catch(() => "");
     const title = await page.title();
     const finalUrl = page.url();
 
@@ -77,10 +77,13 @@ app.post("/brokersnapshot", async (req, res) => {
       insuranceEffectiveDate: findField(["Insurance Effective Date", "Effective Date"]),
       source: "BrokerSnapshot",
       debug: {
-        title,
+        searchUrl,
         finalUrl,
-        textPreview: text.slice(0, 1000),
-        loggedInWarning: text.includes("Please log in") ? "BrokerSnapshot is asking for login" : null
+        title,
+        clickedProfile,
+        asksForLogin: text.includes("Please log in"),
+        hasCaptcha: /captcha|cloudflare|cf_clearance|checking your browser/i.test(html),
+        textPreview: text.slice(0, 1500)
       }
     };
 
@@ -96,9 +99,4 @@ app.post("/brokersnapshot", async (req, res) => {
       error: error.message
     });
   }
-});
-
-const port = process.env.PORT || 10000;
-app.listen(port, "0.0.0.0", () => {
-  console.log(`Server running on port ${port}`);
 });
